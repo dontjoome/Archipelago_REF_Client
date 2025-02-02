@@ -46,6 +46,11 @@ AP_REF.APTrapColor = "FA8072"
 AP_REF.APLocationColor = "00FF7F"
 AP_REF.APEntranceColor = "6495ED"
 
+-- connection config settings
+AP_REF.APHost = "localhost:38281"
+AP_REF.APSlot = "Player1"
+AP_REF.APPassword = ""
+
 function AP_REF.HexToImguiColor(color)
 	local r = string.sub(color, 1, 2)
 	local g = string.sub(color, 3, 4)
@@ -53,15 +58,27 @@ function AP_REF.HexToImguiColor(color)
 	return tonumber("FF"..b..g..r, 16)
 end
 
+AP_REF.clientEnabled = true
+AP_REF.clientDisabledMessage = ""
+
+function AP_REF.EnableInGameClient()
+    AP_REF.clientEnabled = true
+    AP_REF.clientDisabledMessage = ""
+end
+
+function AP_REF.DisableInGameClient(disable_message)
+    AP_REF.clientEnabled = false
+
+    if disable_message then
+        AP_REF.clientDisabledMessage = disable_message
+    end
+end
+
 -----------------------------------
 
 -- Utilize at your own peril
 AP_REF.APClient = nil
 -----------------------------------
-
-local host = "localhost:38281"
-local slot = "Player1"
-local password = ""
 
 local mainWindowVisible = true
 local showMainWindow = true
@@ -73,21 +90,10 @@ local disconnect_client = false
 
 local DEBUG = false
 
-function AP_REF.PrintToLog(message, color)
-	if color == nil then
-		color = "FFFFFF"
-	end
-	table.insert(textLog, {{text=message, color=AP_REF.HexToImguiColor(color)}})
-end
-
 local function debug_print(str)
 	if DEBUG then
 		log.debug(str)
 	end
-end
-
-local function callback_true()
-	return true
 end
 
 local function callback_passthrough()
@@ -168,7 +174,7 @@ local function parse_json_msg(val)
 		end
 		return {text = text, color = color}
 	else
-		return {text = val["text"], color = AP_REF.HexToImguiColor("FFFFFF")}
+		return {text = val["text"]}
 	end
 end
 
@@ -187,9 +193,6 @@ AP_REF.on_print_json = callback_passthrough_two_arg
 AP_REF.on_bounced = callback_passthrough_one_arg
 AP_REF.on_retrieved = callback_passthrough_three_arg
 AP_REF.on_set_reply = callback_passthrough_one_arg
-
--- use to block connecting while game is in invalid state
-AP_REF.on_attempt_connect = callback_true
 
 
 local function set_socket_connected_handler(callback)
@@ -218,26 +221,37 @@ local function set_room_info_handler(callback)
 	function room_info_handler()
 		debug_print("Room info")
 		callback()
-		local tags = {"Lua-APClientPP"}
-		if AP_REF.APGameName == "" then
-			table.insert(tags, "TextOnly")
-		end
-		for i, val in ipairs(AP_REF.APTags) do
-			table.insert(tags, val)
-		end
-		AP_REF.APClient:ConnectSlot(slot, password, AP_REF.APItemsHandling, tags, {0, 3, 9})
+		
+		AP_REF.APClient:ConnectSlot(AP_REF.APSlot, AP_REF.APPassword, AP_REF.APItemsHandling, {"Lua-APClientPP"}, {0, 4, 4})
 	end
 	AP_REF.APClient:set_room_info_handler(room_info_handler)
 end
 local function set_slot_connected_handler(callback)
 	function slot_connected_handler(slot_data)
 		debug_print("Slot connected")
+
+        local tags = {"Lua-APClientPP"}
+
+		if AP_REF.APGameName == "" then
+			table.insert(tags, "TextOnly")
+		end
+
+		for i, val in ipairs(AP_REF.APTags) do
+			table.insert(tags, val)
+		end
+
+        if slot_data.death_link then
+            table.insert(tags, "DeathLink")
+        end
+
+        AP_REF.APClient:ConnectUpdate(nil, tags) -- set deathlink tag if needed
 		callback(slot_data)
 	end
 	AP_REF.APClient:set_slot_connected_handler(slot_connected_handler)
 end
 local function set_slot_refused_handler(callback)
 	function slot_refused_handler(reasons)
+        table.insert(textLog, {{text = table.concat(reasons, ", ")}})
 		debug_print("Slot refused: " .. table.concat(reasons, ", "))
 		callback(reasons)
 		disconnect_client = true
@@ -276,7 +290,7 @@ local function set_print_handler(callback)
 	function print_handler(msg)
 		debug_print("Print")
 		callback(msg)
-		table.insert(textLog, {{text = msg, color = AP_REF.HexToImguiColor("FFFFFF")}})
+		table.insert(textLog, {{text = msg}})
 		--debug_print(msg)
 	end
 	AP_REF.APClient:set_print_handler(print_handler)
@@ -318,7 +332,8 @@ end
 function APConnect(host)
     local uuid = ""
     AP_REF.APClient = AP(uuid, AP_REF.APGameName, host)
-	debug_print("Connecting")
+    table.insert(textLog, {{ text = "Connecting..." }})
+    debug_print("Connecting")
     set_socket_connected_handler(AP_REF.on_socket_connected)
     set_socket_error_handler(AP_REF.on_socket_error)
     set_socket_disconnected_handler(AP_REF.on_socket_disconnected)
@@ -348,70 +363,104 @@ local function main_menu()
 	if mainWindowVisible then
 		imgui.set_next_window_size(Vector2f.new(600, 300), 4)
 		if showMainWindow then
-			showMainWindow = imgui.begin_window("Archipelago REFramework", showMainWindow, nil)
+			showMainWindow = imgui.begin_window("Archipelago Client for REFramework", showMainWindow, nil)
 		else
 			imgui.begin_window("Archipelago REFramework", nil, nil)
 		end
+
+        if not AP_REF.clientEnabled then
+            imgui.text(AP_REF.clientDisabledMessage or "Disabled by game.")
+            return
+        end
+
 		local size = imgui.get_window_size()
-		imgui.push_item_width(size.x / 5)
-		changed, hostname, _1, _2 = imgui.input_text("Host", host)
+        local foo = ""
+        imgui.push_item_width(0.001) 
+        imgui.input_text("Host:", foo) 
+        imgui.same_line()
+        imgui.push_item_width(size.x / 5)
+
+		-- Host Input - Fields come before the textbox, so names are for the next field. 
+		changed, hostname = imgui.input_text("Slot:", AP_REF.APHost)
 		if changed then
-			host = hostname
+			AP_REF.APHost = hostname
 		end
+
 		imgui.same_line()
-		changed, slotname, _1, _2 = imgui.input_text("Slot", slot)
+
+		-- Slotname Input
+		changed, slotname = imgui.input_text("Password:", AP_REF.APSlot)
 		if changed then
-			slot = slotname
+			AP_REF.APSlot = slotname
 		end
+
 		imgui.same_line()
-		changed, pass, _1, _2 = imgui.input_text("Password", password)
+
+		-- Password Input
+		changed, pass = imgui.input_text("", AP_REF.APPassword)
 		if changed then
-			password = pass
+			AP_REF.APPassword = pass
 		end
+
 		imgui.same_line()
+
+		-- Connect/Disconnect Buttons
 		if connected then
 			if imgui.button("Disconnect") then
-				disconnect_client = true
+                disconnect_client = true
+                AP_REF.APClient = nil
+                table.insert(textLog, {{ text = "Disconnected." }})
 			end
 		else
 			if imgui.button("Connect") then
-				if AP_REF.on_attempt_connect() then
-					APConnect(host)
-				end
+				APConnect(AP_REF.APHost)
 			end
 		end
+
 		imgui.pop_item_width()
 		imgui.separator()
-		imgui.begin_child_window("ScrollRegion", Vector2f.new(size.x-25, size.y-85), true, 0)
+
+		-- Chat Log Display
+		imgui.begin_child_window("ScrollRegion", Vector2f.new(size.x-5, size.y-55), true, 0)
 		imgui.push_style_var(14, Vector2f.new(0,0))
+
 		for i, value in ipairs(textLog) do
-			for i, val in ipairs(value) do
-				imgui.text_colored(val["text"], val["color"])
+			for _, val in ipairs(value) do
+                if val["color"] == nil then
+                    val["color"] = AP_REF.HexToImguiColor("FFFFFF")
+                end
+                imgui.text_colored(val["text"], val["color"])
 				imgui.same_line()
 			end
 			imgui.new_line()
 		end
+
 		imgui.pop_style_var()
 		imgui.end_child_window()
-		imgui.text("Input:")
+
+        -- Input Box & Send Button
+		imgui.text("Text Input:")
 		imgui.same_line()
-		imgui.push_item_width((size.x / 4)*3)
-		changed, input, _1, _2 = imgui.input_text("", current_text)
+		imgui.push_item_width((size.x / 4) * 3)
+		changed, input = imgui.input_text("", current_text)
 		if changed then
 			current_text = input
 		end
+
 		imgui.same_line()
+
+		-- Send Button
 		if imgui.button("Send") then
-			if current_text ~= "" then
-				if string.sub(current_text,1, 1) == "/" then
+			if current_text and current_text ~= " " then
+				if string.sub(current_text, 1, 1) == "/" then
 					DisplayClientCommand(string.sub(current_text, 2))
-					current_text = ""
-				elseif ap ~= nil then
+				elseif AP_REF.APClient then
 					AP_REF.APClient:Say(current_text)
-					current_text = ""
 				end
+				current_text = "" -- Clear input after sending
 			end
 		end
+
 		imgui.pop_item_width()
 		imgui.end_window()
 	end
@@ -427,6 +476,12 @@ local function SaveConfig()
     config["APTrapColor"] = AP_REF.APTrapColor
     config["APLocationColor"] = AP_REF.APLocationColor
 	config["APEntranceColor"] = AP_REF.APEntranceColor
+
+    -- store last connection settings so they're restored on game relaunch
+    config["APHost"] = AP_REF.APHost
+    config["APSlot"] = AP_REF.APSlot
+    config["APPassword"] = AP_REF.APPassword
+
     if not json.dump_file("AP_REF.json", config, 4) then
         print("Config cannot be saved!")
     end
@@ -459,6 +514,17 @@ local function ReadConfig()
 		if config["APEntranceColor"] ~= nil then
 			AP_REF.APEntranceColor = config["APEntranceColor"]
 		end
+
+        -- save last connection settings so we can restore them when the game is closed and reopened
+        if config["APHost"] ~= nil then
+			AP_REF.APHost = config["APHost"]
+		end
+        if config["APSlot"] ~= nil then
+			AP_REF.APSlot = config["APSlot"]
+		end
+        if config["APPassword"] ~= nil then
+			AP_REF.APPassword = config["APPassword"]
+		end
     else
         SaveConfig()
     end
@@ -472,7 +538,7 @@ end)
 
 
 re.on_draw_ui(function()
-	changed, showWindow = imgui.checkbox("Show Archipelago UI", showMainWindow)
+	changed, showWindow = imgui.checkbox("Show Archipelago Client UI", showMainWindow)
 	if changed then
 		showMainWindow = showWindow
 	end
@@ -488,9 +554,7 @@ ReadConfig()
 
 re.on_pre_application_entry("UpdateBehavior", function() 
     --main loop access
-	if reframework:is_drawing_ui() then
-		mainWindowVisible = true
-	elseif showMainWindow then
+	if reframework:is_drawing_ui() and showMainWindow then
 		mainWindowVisible = true
 	else
 		mainWindowVisible = false
